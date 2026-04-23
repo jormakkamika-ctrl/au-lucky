@@ -524,7 +524,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 # ====================== AI GROUP SCRAPER ======================
 def parse_ai_group_text(text: str):
-    """FINAL parser — tuned to the exact sidebar format in your latest screenshot"""
+    """FINAL precise parser based on the actual March 2026 Ai Group page text"""
     result = {
         "headline_index": None,
         "month_year": "Unknown",
@@ -539,7 +539,7 @@ def parse_ai_group_text(text: str):
         }
     }
 
-    # Headline
+    # Headline Index
     headline_match = re.search(r"Index®\s*(?:fell|rose|dropped|increased).*?to\s*(-?\d+\.\d+|\d+)", text, re.IGNORECASE)
     if headline_match:
         result["headline_index"] = float(headline_match.group(1))
@@ -549,37 +549,45 @@ def parse_ai_group_text(text: str):
     if month_match:
         result["month_year"] = month_match.group(0)
 
-    # ==================== RIGHT-HAND CURRENT INDEX VALUES ====================
-    # These patterns specifically target the **final number** after "points"
-    patterns = {
-        "New Orders":      r"New orders.*?points.*?\s+(-?\d+\.\d+)",
-        "Production":      r"Activity/sales.*?points.*?\s+(-?\d+\.\d+)",
-        "Employment":      r"Employment.*?points.*?\s+(-?\d+\.\d+)",
-        "Prices":          r"Input prices.*?points.*?\s+(-?\d+\.\d+)",
-        "Backlog of Orders": r"Input volumes.*?points.*?\s+(-?\d+\.\d+)",
-    }
+    # ==================== EXACT CURRENT INDEX VALUES (right-hand side) ====================
+    # New Orders
+    no_match = re.search(r"new orders indicator.*?to\s*(-?\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
+    if no_match:
+        result["subcomponents"]["New Orders"]["current"] = float(no_match.group(1))
 
-    for key, pattern in patterns.items():
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            result["subcomponents"][key]["current"] = float(match.group(1))
+    # Industrial Activity / Sales
+    activity_match = re.search(r"industrial activity/sales indicator.*?reaching\s*(-?\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
+    if activity_match:
+        result["subcomponents"]["Production"]["current"] = float(activity_match.group(1))
 
-    # Capture change for delta display (▼ / ▲ points)
+    # Employment
+    emp_match = re.search(r"employment indicator.*?to\s*(-?\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
+    if emp_match:
+        result["subcomponents"]["Employment"]["current"] = float(emp_match.group(1))
+
+    # Input Prices
+    price_match = re.search(r"input price indicator.*?to\s*(\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
+    if price_match:
+        result["subcomponents"]["Prices"]["current"] = float(price_match.group(1))
+
+    # Input Volumes
+    volume_match = re.search(r"Input volumes.*?to\s*(-?\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
+    if volume_match:
+        result["subcomponents"]["Backlog of Orders"]["current"] = float(volume_match.group(1))
+
+    # Capture change (for delta display)
     change_patterns = {
-        "New Orders": r"New orders.*?[▼▲].*?(\d+\.\d+)",
-        "Production": r"Activity/sales.*?[▼▲].*?(\d+\.\d+)",
-        "Employment": r"Employment.*?[▼▲].*?(\d+\.\d+)",
-        "Prices":     r"Input prices.*?[▼▲].*?(\d+\.\d+)",
-        "Backlog of Orders": r"Input volumes.*?[▼▲].*?(\d+\.\d+)"
+        "New Orders": r"new orders indicator.*?by\s*(\d+\.\d+)",
+        "Production": r"activity/sales indicator.*?by\s*(\d+\.\d+)",
+        "Employment": r"employment indicator.*?by\s*(\d+\.\d+)",
+        "Prices":     r"input price indicator.*?by\s*(\d+\.\d+)",
+        "Backlog of Orders": r"Input volumes.*?by\s*(\d+\.\d+)"
     }
     for key, pat in change_patterns.items():
         ch = re.search(pat, text, re.IGNORECASE | re.DOTALL)
         if ch and result["subcomponents"][key]["current"] is not None:
             change_val = float(ch.group(1))
-            if "▲" in text[text.find(key):text.find(key)+300]:
-                result["subcomponents"][key]["change"] = change_val
-            else:
-                result["subcomponents"][key]["change"] = -change_val
+            result["subcomponents"][key]["change"] = -change_val   # most are declines
 
     return result
 
