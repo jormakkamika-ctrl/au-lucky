@@ -519,29 +519,123 @@ def get_respondent_comments(text: str) -> list:
     bullets = re.findall(bullet_pattern, section, re.MULTILINE | re.DOTALL)
     return [f"- {b.strip()}" for b in bullets if len(b.strip()) > 15]
 
-def parse_au_pmi_text(text: str):
-    """AU-specific parser for S&P Global Australia Manufacturing PMI"""
-    pmi_match = re.search(r"PMI.*?(\d+\.\d+)", text, re.IGNORECASE)
-    pmi = float(pmi_match.group(1)) if pmi_match else 50.0
-
-    month_match = re.search(r"(January|February|March|April|May|June|July|August|September|October|November|December) \d{4}", text)
-    month_year = month_match.group(0) if month_match else "Unknown"
-
-    # Subcomponents — AU is narrative, so we approximate
-    sub = {
-        "New Orders": {"current": None, "change": None, "trend": None},
-        "Output": {"current": None, "change": None, "trend": None},
-        "Employment": {"current": None, "change": None, "trend": None},
-        "Prices": {"current": None, "change": None, "trend": None},
-        "Backlog of Orders": {"current": None, "change": None, "trend": None},
+# ====================== AI GROUP SCRAPER (NEW) ======================
+def parse_ai_group_text(text: str):
+    """Robust parser for Ai Group Australian Industry Index page (March 2026 format)"""
+    result = {
+        "headline_index": None,
+        "month_year": "Unknown",
+        "sub_sectors": [],
+        "comments": []
     }
-    # Rough extraction — you can refine regexes after seeing real reports
-    for key in list(sub.keys()):
-        match = re.search(rf"{key}.*?(\d+\.\d+)", text, re.IGNORECASE)
+
+    # 1. Headline Index
+    headline_match = re.search(r"Index®\s*(?:fell|rose|dropped|increased).*?to\s*(-?\d+\.\d+|\d+)", text, re.IGNORECASE)
+    if headline_match:
+        result["headline_index"] = float(headline_match.group(1))
+    else:
+        # Fallback patterns
+        alt_match = re.search(r"to\s*(-?\d+\.\d+|\d+)\s*(?:in|for)\s*(March|April|May|June|July|August|September|October|November|December)", text, re.IGNORECASE)
+        if alt_match:
+            result["headline_index"] = float(alt_match.group(1))
+
+    # 2. Month / Year
+    month_match = re.search(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+202[0-9]", text)
+    if month_match:
+        result["month_year"] = month_match.group(0)
+
+    # 3. Sub-sectors (very reliable on current page)
+    sub_patterns = [
+        r"chemicals.*?(-?\d+\.\d+)", r"minerals.*?metals.*?(-?\d+\.\d+)",
+        r"machinery.*?equipment.*?(-?\d+\.\d+)", r"Food.*?beverages.*?TCF.*?(-?\d+\.\d+)",
+        r"PMI®.*?(-?\d+\.\d+)", r"PCI®.*?(-?\d+\.\d+)"
+    ]
+    sub_names = ["Chemicals", "Minerals & Metals", "Machinery & Equipment", "Food, Beverages & TCF", "Australian PMI", "Australian PCI"]
+
+    for name, pattern in zip(sub_names, sub_patterns):
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
         if match:
-            sub[key]["current"] = float(match.group(1))
-    comments = get_respondent_comments(text)
-    return pmi, month_year, [], [], comments, sub   # growth/contraction lists empty for AU
+            value = float(match.group(1))
+            result["sub_sectors"].append({"sector": name, "index": value})
+
+    # 4. Comments / Liaison highlights / Economist comments
+    comment_section = re.search(r"(Liaison highlights|Energy crisis insights|Key findings|Respondents reported)(.*?)(?=##|\Z)", text, re.DOTALL | re.IGNORECASE)
+    if comment_section:
+        comments_raw = comment_section.group(2)
+        bullets = re.findall(r"[-•]\s*(.+?)(?=\n\n|\Z)", comments_raw, re.DOTALL)
+        result["comments"] = [f"- {b.strip()}" for b in bullets if len(b.strip()) > 20]
+
+    return result
+
+
+# ====================== UPDATED build_historical_dataset (Ai Group + S&P fallback) ======================
+@st.cache_data(ttl=86400)
+def build_historical_dataset():
+    all_data = []
+    report_metadata = {}
+    log_messages = []
+
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    # ==================== AI GROUP (Primary source for Tab 1) ====================
+    ai_url = "https://www.australianindustrygroup.com.au/resourcecentre/research-economics/australian-industry-index/"
+    try:
+        r = session.get(ai_url, timeout=30)
+        r.raise_for_status()
+        raw_text = BeautifulSoup(r.text, "html.parser").get_text(separator=" ")
+        
+        ai_data = parse_ai_group_text(raw_text)
+        
+        if ai_data["month_year"] != "Unknown" and ai_data["headline_index"] is not None:
+            date_obj = pd.to_datetime(ai_data["month_year"])
+            
+            report_metadata[date_obj] = {
+                "ai_group": ai_data,
+                "pmi": 50.0,                    # placeholder - S&P not used here
+                "subcomponents": {},            # S&P subcomponents go here if you want
+                "comments": ai_data["comments"],
+                "url": ai_url,
+                "source": "Ai Group"
+            }
+            
+            all_data.append({
+                "date": date_obj,
+                "industry": "Overall Industry",
+                "score": ai_data["headline_index"],
+                "pmi": ai_data["headline_index"],
+                "url": ai_url
+            })
+            
+            log_messages.append(f"✅ Ai Group parsed: {ai_data['month_year']} | Index = {ai_data['headline_index']:.1f}")
+            log_messages.append(f"   Sub-sectors found: {len(ai_data['sub_sectors'])}")
+        else:
+            log_messages.append("⚠️ Ai Group parsing failed - no headline index found")
+    except Exception as e:
+        log_messages.append(f"❌ Ai Group scrape failed: {str(e)[:100]}")
+
+    # ==================== S&P Global Australia PMI (still used for Tab 2 drivers) ====================
+    # (Optional - you can keep or remove this block)
+    try:
+        sp_url = "https://www.pmi.spglobal.com/public/release/pressreleases"
+        r = session.get(sp_url, timeout=20)
+        soup = BeautifulSoup(r.text, "html.parser")
+        links = [a['href'] for a in soup.find_all('a', href=True) 
+                 if "australia-manufacturing-pmi" in a['href'].lower()]
+        if links:
+            full_url = "https://www.pmi.spglobal.com" + links[0] if links[0].startswith('/') else links[0]
+            resp = session.get(full_url, timeout=25)
+            raw_text = BeautifulSoup(resp.text, "html.parser").get_text(separator=" ")
+            # Reuse your original parse_au_pmi_text if you still have it
+            # For now we just store the latest headline
+            pmi_match = re.search(r"PMI.*?(\d+\.\d+)", raw_text, re.IGNORECASE)
+            pmi_val = float(pmi_match.group(1)) if pmi_match else 50.0
+            log_messages.append(f"✅ S&P Global PMI headline: {pmi_val:.1f}")
+    except:
+        pass
+
+    df = pd.DataFrame(all_data)
+    return df, report_metadata, log_messages
 
 # ====================== DATA LOADERS ======================
 @st.cache_data(ttl=86400 * 7, show_spinner=False)
@@ -562,38 +656,6 @@ def get_full_stock_universe():
         st.error(f"ASX universe load failed: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=86400)
-def build_historical_dataset():
-    all_data = []
-    report_metadata = {}
-    archive_url = "https://www.pmi.spglobal.com/public/release/pressreleases"
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
-
-    try:
-        r = session.get(archive_url, timeout=30)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        # Find Australia Manufacturing PMI links
-        links = [a['href'] for a in soup.find_all('a', href=True)
-                 if "australia-manufacturing-pmi" in a['href'].lower() or "manufacturing-pmi" in a['href'].lower() and "australia" in a.text.lower()]
-        links = list(dict.fromkeys(links))[:8]
-
-        for url in links:
-            full_url = "https://www.pmi.spglobal.com" + url if url.startswith('/') else url
-            try:
-                resp = session.get(full_url, timeout=25)
-                raw_text = BeautifulSoup(resp.text, "html.parser").get_text(separator=" ")
-                pmi, m_year, growth, contr, comments, subcomponents = parse_au_pmi_text(raw_text)
-                if m_year == "Unknown":
-                    continue
-                date_obj = pd.to_datetime(m_year)
-                report_metadata[date_obj] = {"comments": comments, "pmi": pmi, "subcomponents": subcomponents, "url": full_url}
-                all_data.append({"date": date_obj, "industry": "Overall Manufacturing", "score": 0, "pmi": pmi, "url": full_url})
-            except Exception as inner_e:
-                continue
-    except Exception as e:
-        st.warning(f"Archive scrape issue: {e}")
 
     df = pd.DataFrame(all_data)
     return df, report_metadata, []
