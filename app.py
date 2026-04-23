@@ -524,7 +524,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 # ====================== AI GROUP SCRAPER ======================
 def parse_ai_group_text(text: str):
-    """Final parser optimised for the right-hand sidebar (exact structure in your screenshot)"""
+    """Final parser that correctly extracts the RIGHT-HAND current index from the sidebar (your screenshot)"""
     result = {
         "headline_index": None,
         "month_year": "Unknown",
@@ -549,46 +549,35 @@ def parse_ai_group_text(text: str):
     if month_match:
         result["month_year"] = month_match.group(0)
 
-    # ==================== EXACT SIDEBAR MATCHES (current index on the right) ====================
-    # New Orders
-    no_match = re.search(r"New orders.*?points.*?(-?\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
-    if no_match:
-        result["subcomponents"]["New Orders"]["current"] = float(no_match.group(1))
+    # ==================== RIGHT SIDEBAR CURRENT VALUES ====================
+    # These patterns target the FINAL number after "points" (exactly as in your screenshot)
+    patterns = {
+        "New Orders":      r"New orders.*?points.*?\s+(-?\d+\.\d+)",
+        "Production":      r"Activity/sales.*?points.*?\s+(-?\d+\.\d+)",
+        "Employment":      r"Employment.*?points.*?\s+(-?\d+\.\d+)",
+        "Prices":          r"Input prices.*?points.*?\s+(-?\d+\.\d+)",
+        "Backlog of Orders": r"Input volumes.*?points.*?\s+(-?\d+\.\d+)",
+    }
 
-    # Activity/sales → Production
-    activity_match = re.search(r"Activity/sales.*?points.*?(-?\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
-    if activity_match:
-        result["subcomponents"]["Production"]["current"] = float(activity_match.group(1))
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if match:
+            result["subcomponents"][key]["current"] = float(match.group(1))
 
-    # Employment
-    emp_match = re.search(r"Employment.*?points.*?(-?\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
-    if emp_match:
-        result["subcomponents"]["Employment"]["current"] = float(emp_match.group(1))
-
-    # Input prices
-    price_match = re.search(r"Input prices.*?points.*?(-?\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
-    if price_match:
-        result["subcomponents"]["Prices"]["current"] = float(price_match.group(1))
-
-    # Input volumes → Backlog of Orders
-    volume_match = re.search(r"Input volumes.*?points.*?(-?\d+\.\d+)", text, re.IGNORECASE | re.DOTALL)
-    if volume_match:
-        result["subcomponents"]["Backlog of Orders"]["current"] = float(volume_match.group(1))
-
-    # Optional: also capture the change (points moved) for delta display
+    # Optional: capture the change (▼ / ▲ points) for the delta display
     change_patterns = {
         "New Orders": r"New orders.*?[▼▲].*?(\d+\.\d+)",
         "Production": r"Activity/sales.*?[▼▲].*?(\d+\.\d+)",
         "Employment": r"Employment.*?[▼▲].*?(\d+\.\d+)",
-        "Prices": r"Input prices.*?[▼▲].*?(\d+\.\d+)",
-        "Backlog of Orders": r"Input volumes.*?[▼▲].*?(\d+\.\d+)"
+        "Prices":     r"Input prices.*?[▼▲].*?(\d+\.\d+)",
+        "Backlog of Orders": r"Input volumes.*?[▼▲].*?(\d+\.\d+)",
     }
     for key, pat in change_patterns.items():
         ch_match = re.search(pat, text, re.IGNORECASE | re.DOTALL)
         if ch_match and result["subcomponents"][key]["current"] is not None:
             change_val = float(ch_match.group(1))
-            # Most are declines, so we make change negative unless it's a rise
-            if "▲" in text[ text.find(key): text.find(key)+200 ]:
+            # Most items are declines
+            if "▲" in text[text.find(key):text.find(key)+300]:
                 result["subcomponents"][key]["change"] = change_val
             else:
                 result["subcomponents"][key]["change"] = -change_val
