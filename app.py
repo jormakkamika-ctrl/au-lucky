@@ -524,27 +524,47 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 # ====================== AI GROUP SCRAPER ======================
 def parse_ai_group_text(text: str):
-    """Robust parser for Ai Group Australian Industry Index®"""
+    """Extracts ISM-style subcomponents from Ai Group Australian Industry Index"""
     result = {
         "headline_index": None,
         "month_year": "Unknown",
         "sub_sectors": [],
-        "comments": []
+        "comments": [],
+        "subcomponents": {                     # ← NEW: for Sub-Index Command Center
+            "New Orders": {"current": None, "change": None, "trend": None},
+            "Production": {"current": None, "change": None, "trend": None},   # Industrial activity/sales
+            "Employment": {"current": None, "change": None, "trend": None},
+            "Prices": {"current": None, "change": None, "trend": None},       # Input prices
+            "Backlog of Orders": {"current": None, "change": None, "trend": None},
+        }
     }
 
-    # Headline Index
-    headline_match = re.search(r"Index®\s*(?:fell|rose|dropped|increased|was).*?to\s*(-?\d+\.\d+|\d+)", text, re.IGNORECASE)
+    # Headline
+    headline_match = re.search(r"Index®\s*(?:fell|rose|dropped|increased).*?to\s*(-?\d+\.\d+|\d+)", text, re.IGNORECASE)
     if headline_match:
         result["headline_index"] = float(headline_match.group(1))
-    else:
-        alt_match = re.search(r"(?:to|at)\s*(-?\d+\.\d+|\d+)\s*(?:in|for)\s*(March|April|May|June|July|August|September|October|November|December)", text, re.IGNORECASE)
-        if alt_match:
-            result["headline_index"] = float(alt_match.group(1))
 
-    # Month / Year
+    # Month/Year
     month_match = re.search(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+202[0-9]", text)
     if month_match:
         result["month_year"] = month_match.group(0)
+
+    # Subcomponents (activity indicators)
+    patterns = {
+        "New Orders": r"new orders indicator.*?(-?\d+\.\d+).*?(?:by|fell|rose|dropped|increased).*?(\d+\.\d+)",
+        "Production": r"industrial activity.*?sales indicator.*?(-?\d+\.\d+).*?(?:by|fell|rose|dropped|increased).*?(\d+\.\d+)",
+        "Employment": r"employment indicator.*?(-?\d+\.\d+)",
+        "Prices": r"input price indicator.*?(-?\d+\.\d+)",
+        "Backlog of Orders": r"input volumes.*?(-?\d+\.\d+)"   # closest proxy
+    }
+
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if match:
+            groups = match.groups()
+            result["subcomponents"][key]["current"] = float(groups[0])
+            if len(groups) > 1 and groups[1]:
+                result["subcomponents"][key]["change"] = float(groups[1])
 
     # Sub-sectors (very reliable on the current Ai Group page)
     sub_patterns = [
