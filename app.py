@@ -524,22 +524,22 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 # ====================== AI GROUP SCRAPER ======================
 def parse_ai_group_text(text: str):
-    """Extracts ISM-style subcomponents from Ai Group Australian Industry Index"""
+    """Improved parser that extracts ISM-style sub-indices from Ai Group"""
     result = {
         "headline_index": None,
         "month_year": "Unknown",
         "sub_sectors": [],
         "comments": [],
-        "subcomponents": {                     # ← NEW: for Sub-Index Command Center
-            "New Orders": {"current": None, "change": None, "trend": None},
-            "Production": {"current": None, "change": None, "trend": None},   # Industrial activity/sales
-            "Employment": {"current": None, "change": None, "trend": None},
-            "Prices": {"current": None, "change": None, "trend": None},       # Input prices
-            "Backlog of Orders": {"current": None, "change": None, "trend": None},
+        "subcomponents": {  # ← This is what powers the Sub-Index Command Center
+            "New Orders": {"current": None, "change": None},
+            "Production": {"current": None, "change": None},
+            "Employment": {"current": None, "change": None},
+            "Prices": {"current": None, "change": None},
+            "Backlog of Orders": {"current": None, "change": None},
         }
     }
 
-    # Headline
+    # Headline Index
     headline_match = re.search(r"Index®\s*(?:fell|rose|dropped|increased).*?to\s*(-?\d+\.\d+|\d+)", text, re.IGNORECASE)
     if headline_match:
         result["headline_index"] = float(headline_match.group(1))
@@ -549,47 +549,51 @@ def parse_ai_group_text(text: str):
     if month_match:
         result["month_year"] = month_match.group(0)
 
-    # Subcomponents (activity indicators)
+    # ==================== SUB-INDICES (exact matches from current report) ====================
     patterns = {
-        "New Orders": r"new orders indicator.*?(-?\d+\.\d+).*?(?:by|fell|rose|dropped|increased).*?(\d+\.\d+)",
-        "Production": r"industrial activity.*?sales indicator.*?(-?\d+\.\d+).*?(?:by|fell|rose|dropped|increased).*?(\d+\.\d+)",
-        "Employment": r"employment indicator.*?(-?\d+\.\d+)",
-        "Prices": r"input price indicator.*?(-?\d+\.\d+)",
-        "Backlog of Orders": r"input volumes.*?(-?\d+\.\d+)"   # closest proxy
+        "New Orders": r"new orders indicator.*?declined.*?by\s*(\d+\.\d+).*?to\s*(-?\d+\.\d+)",
+        "Production": r"industrial activity/sales indicator.*?declined.*?by\s*(\d+\.\d+).*?reaching\s*(-?\d+\.\d+)",
+        "Employment": r"employment indicator.*?to\s*(-?\d+\.\d+)",
+        "Prices": r"input price indicator.*?rose.*?to\s*(\d+\.\d+)",
+        "Backlog of Orders": r"input volumes.*?declined.*?by\s*(\d+\.\d+)",
     }
 
     for key, pattern in patterns.items():
         match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
         if match:
             groups = match.groups()
-            result["subcomponents"][key]["current"] = float(groups[0])
-            if len(groups) > 1 and groups[1]:
-                result["subcomponents"][key]["change"] = float(groups[1])
+            if len(groups) == 2:
+                result["subcomponents"][key]["change"] = float(groups[0])
+                result["subcomponents"][key]["current"] = float(groups[1])
+            else:
+                result["subcomponents"][key]["current"] = float(groups[0])
 
-    # Sub-sectors (very reliable on the current Ai Group page)
+    # Fallbacks if the above miss (very common on the page)
+    if result["subcomponents"]["New Orders"]["current"] is None:
+        no_match = re.search(r"new orders indicator.*?to\s*(-?\d+\.\d+)", text, re.IGNORECASE)
+        if no_match:
+            result["subcomponents"]["New Orders"]["current"] = float(no_match.group(1))
+
+    if result["subcomponents"]["Production"]["current"] is None:
+        prod_match = re.search(r"industrial activity/sales indicator.*?reaching\s*(-?\d+\.\d+)", text, re.IGNORECASE)
+        if prod_match:
+            result["subcomponents"]["Production"]["current"] = float(prod_match.group(1))
+
+    # Sub-sectors (keep for future use)
     sub_patterns = [
-        r"Chemicals.*?(-?\d+\.\d+)", 
-        r"Minerals.*?Metals.*?(-?\d+\.\d+)",
-        r"Machinery.*?Equipment.*?(-?\d+\.\d+)", 
-        r"Food.*?Beverages.*?TCF.*?(-?\d+\.\d+)",
-        r"Construction.*?(-?\d+\.\d+)",
-        r"Australian PMI®.*?(-?\d+\.\d+)"
+        r"Chemicals.*?(-?\d+\.\d+)", r"Minerals.*?Metals.*?(-?\d+\.\d+)",
+        r"Machinery.*?Equipment.*?(-?\d+\.\d+)", r"Food.*?Beverages.*?TCF.*?(-?\d+\.\d+)"
     ]
-    sub_names = ["Chemicals", "Minerals & Metals", "Machinery & Equipment", 
-                 "Food, Beverages & TCF", "Construction", "Australian PMI"]
+    sub_names = ["Chemicals", "Minerals & Metals", "Machinery & Equipment", "Food, Beverages & TCF"]
+    for name, pat in zip(sub_names, sub_patterns):
+        m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
+        if m:
+            result["sub_sectors"].append({"sector": name, "index": float(m.group(1))})
 
-    for name, pattern in zip(sub_names, sub_patterns):
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            value = float(match.group(1))
-            result["sub_sectors"].append({"sector": name, "index": value})
-
-    # Comments / Economist highlights
-    comment_section = re.search(r"(Liaison highlights|Key findings|Respondents reported|Economist comment)(.*?)(?=##|\Z|Source:)", 
-                                text, re.DOTALL | re.IGNORECASE)
+    # Comments
+    comment_section = re.search(r"(Uncertainty|Rising input costs|Supply chain|Demand|Cash flow)(.*?)(?=##|\Z)", text, re.DOTALL | re.IGNORECASE)
     if comment_section:
-        comments_raw = comment_section.group(2)
-        bullets = re.findall(r"[-•]\s*(.+?)(?=\n\n|\Z)", comments_raw, re.DOTALL)
+        bullets = re.findall(r"[-•]\s*(.+?)(?=\n\n|\Z)", comment_section.group(2), re.DOTALL)
         result["comments"] = [f"- {b.strip()}" for b in bullets if len(b.strip()) > 20]
 
     return result
