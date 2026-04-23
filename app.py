@@ -519,9 +519,12 @@ def get_respondent_comments(text: str) -> list:
     bullets = re.findall(bullet_pattern, section, re.MULTILINE | re.DOTALL)
     return [f"- {b.strip()}" for b in bullets if len(b.strip()) > 15]
 
-# ====================== AI GROUP SCRAPER (NEW) ======================
+# ====================== HEADERS (required for scraping) ======================
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+# ====================== AI GROUP SCRAPER ======================
 def parse_ai_group_text(text: str):
-    """Robust parser for Ai Group Australian Industry Index page (March 2026 format)"""
+    """Robust parser for Ai Group Australian Industry Index®"""
     result = {
         "headline_index": None,
         "month_year": "Unknown",
@@ -529,28 +532,31 @@ def parse_ai_group_text(text: str):
         "comments": []
     }
 
-    # 1. Headline Index
-    headline_match = re.search(r"Index®\s*(?:fell|rose|dropped|increased).*?to\s*(-?\d+\.\d+|\d+)", text, re.IGNORECASE)
+    # Headline Index
+    headline_match = re.search(r"Index®\s*(?:fell|rose|dropped|increased|was).*?to\s*(-?\d+\.\d+|\d+)", text, re.IGNORECASE)
     if headline_match:
         result["headline_index"] = float(headline_match.group(1))
     else:
-        # Fallback patterns
-        alt_match = re.search(r"to\s*(-?\d+\.\d+|\d+)\s*(?:in|for)\s*(March|April|May|June|July|August|September|October|November|December)", text, re.IGNORECASE)
+        alt_match = re.search(r"(?:to|at)\s*(-?\d+\.\d+|\d+)\s*(?:in|for)\s*(March|April|May|June|July|August|September|October|November|December)", text, re.IGNORECASE)
         if alt_match:
             result["headline_index"] = float(alt_match.group(1))
 
-    # 2. Month / Year
+    # Month / Year
     month_match = re.search(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+202[0-9]", text)
     if month_match:
         result["month_year"] = month_match.group(0)
 
-    # 3. Sub-sectors (very reliable on current page)
+    # Sub-sectors (very reliable on the current Ai Group page)
     sub_patterns = [
-        r"chemicals.*?(-?\d+\.\d+)", r"minerals.*?metals.*?(-?\d+\.\d+)",
-        r"machinery.*?equipment.*?(-?\d+\.\d+)", r"Food.*?beverages.*?TCF.*?(-?\d+\.\d+)",
-        r"PMI®.*?(-?\d+\.\d+)", r"PCI®.*?(-?\d+\.\d+)"
+        r"Chemicals.*?(-?\d+\.\d+)", 
+        r"Minerals.*?Metals.*?(-?\d+\.\d+)",
+        r"Machinery.*?Equipment.*?(-?\d+\.\d+)", 
+        r"Food.*?Beverages.*?TCF.*?(-?\d+\.\d+)",
+        r"Construction.*?(-?\d+\.\d+)",
+        r"Australian PMI®.*?(-?\d+\.\d+)"
     ]
-    sub_names = ["Chemicals", "Minerals & Metals", "Machinery & Equipment", "Food, Beverages & TCF", "Australian PMI", "Australian PCI"]
+    sub_names = ["Chemicals", "Minerals & Metals", "Machinery & Equipment", 
+                 "Food, Beverages & TCF", "Construction", "Australian PMI"]
 
     for name, pattern in zip(sub_names, sub_patterns):
         match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
@@ -558,8 +564,9 @@ def parse_ai_group_text(text: str):
             value = float(match.group(1))
             result["sub_sectors"].append({"sector": name, "index": value})
 
-    # 4. Comments / Liaison highlights / Economist comments
-    comment_section = re.search(r"(Liaison highlights|Energy crisis insights|Key findings|Respondents reported)(.*?)(?=##|\Z)", text, re.DOTALL | re.IGNORECASE)
+    # Comments / Economist highlights
+    comment_section = re.search(r"(Liaison highlights|Key findings|Respondents reported|Economist comment)(.*?)(?=##|\Z|Source:)", 
+                                text, re.DOTALL | re.IGNORECASE)
     if comment_section:
         comments_raw = comment_section.group(2)
         bullets = re.findall(r"[-•]\s*(.+?)(?=\n\n|\Z)", comments_raw, re.DOTALL)
@@ -568,7 +575,7 @@ def parse_ai_group_text(text: str):
     return result
 
 
-# ====================== UPDATED build_historical_dataset (Ai Group + S&P fallback) ======================
+# ====================== UPDATED build_historical_dataset ======================
 @st.cache_data(ttl=86400)
 def build_historical_dataset():
     all_data = []
@@ -576,7 +583,7 @@ def build_historical_dataset():
     log_messages = []
 
     session = requests.Session()
-    session.headers.update(HEADERS)
+    session.headers.update(HEADERS)   # ← now defined locally
 
     # ==================== AI GROUP (Primary source for Tab 1) ====================
     ai_url = "https://www.australianindustrygroup.com.au/resourcecentre/research-economics/australian-industry-index/"
@@ -592,8 +599,6 @@ def build_historical_dataset():
             
             report_metadata[date_obj] = {
                 "ai_group": ai_data,
-                "pmi": 50.0,                    # placeholder - S&P not used here
-                "subcomponents": {},            # S&P subcomponents go here if you want
                 "comments": ai_data["comments"],
                 "url": ai_url,
                 "source": "Ai Group"
@@ -607,12 +612,17 @@ def build_historical_dataset():
                 "url": ai_url
             })
             
-            log_messages.append(f"✅ Ai Group parsed: {ai_data['month_year']} | Index = {ai_data['headline_index']:.1f}")
+            log_messages.append(f"✅ Ai Group parsed successfully: {ai_data['month_year']} | Index = {ai_data['headline_index']:.1f}")
             log_messages.append(f"   Sub-sectors found: {len(ai_data['sub_sectors'])}")
         else:
             log_messages.append("⚠️ Ai Group parsing failed - no headline index found")
     except Exception as e:
-        log_messages.append(f"❌ Ai Group scrape failed: {str(e)[:100]}")
+        log_messages.append(f"❌ Ai Group scrape failed: {str(e)[:120]}")
+
+    # (S&P Global block can stay or be removed - it is optional)
+
+    df = pd.DataFrame(all_data)
+    return df, report_metadata, log_messages
 
     # ==================== S&P Global Australia PMI (still used for Tab 2 drivers) ====================
     # (Optional - you can keep or remove this block)
