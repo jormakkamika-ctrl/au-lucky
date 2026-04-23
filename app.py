@@ -746,16 +746,25 @@ with tab1:
     </div>
     """, unsafe_allow_html=True)
 
-    section_header("Ai Group Sub-Sector Command Center", "Key sub-indices from latest Australian Industry Index®")
+        # ====================== SUB-INDEX COMMAND CENTER (Ai Group style) ======================
+    section_header("Sub-Index Command Center", "Key Ai Group activity indicators | value / mom change")
 
-    # Display Ai Group sub-sectors (dynamically pulled)
-    sub_sector_df = pd.DataFrame(ai_group_data.get("sub_sectors", [
-        {"sector": "Chemicals", "index": -18.1},
-        {"sector": "Minerals & Metals", "index": -30.2},
-        {"sector": "Machinery & Equipment", "index": -26.2},
-        {"sector": "Food, Beverages & TCF", "index": -33.2},
-    ]))
+    ai_sub = ai_group_data.get("subcomponents", {})
+    keys_order = ["New Orders", "Production", "Employment", "Prices", "Backlog of Orders"]
+    labels_order = ["New Orders", "Industrial Activity / Sales", "Employment", "Input Prices", "Input Volumes"]
 
+    metric_cols = st.columns(5)
+    for i, (key, label) in enumerate(zip(keys_order, labels_order)):
+        data = ai_sub.get(key, {})
+        current = data.get("current")
+        change = data.get("change")
+        with metric_cols[i]:
+            if current is not None:
+                delta_str = f"{change:+.1f}" if change is not None else None
+                delta_color = "normal" if current >= 0 else "inverse"
+                st.metric(label=label, value=f"{current:.1f}", delta=delta_str, delta_color=delta_color)
+            else:
+                st.metric(label=label, value="N/A")
     st.dataframe(
         sub_sector_df.style
         .background_gradient(cmap="RdYlGn", subset=["index"], vmin=-40, vmax=10)
