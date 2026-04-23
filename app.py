@@ -720,11 +720,10 @@ tab1, tab2 = st.tabs(["Primary Effects (Ai Group > GICS Sectors > Stocks)", "Fun
 
 # ====================== TAB 1 ======================
 with tab1:
-    # === Ai Group data is now the source for sector rankings ===
-    # (We fetch it once in build_historical_dataset and store in latest_meta)
+    # === Ai Group data (primary source for Tab 1) ===
     ai_group_data = latest_meta.get("ai_group", {})
-    ai_headline = ai_group_data.get("headline_index", -23.6)  # fallback
-    ai_date = latest_meta.get("ai_date", latest_date)
+    ai_headline = ai_group_data.get("headline_index", -23.6)          # fallback
+    ai_date = latest_meta.get("date", latest_date)                    # or extract from month_year if needed
 
     regime = "Expansion" if ai_headline >= 0 else "Contraction"
     regime_class = "pmi-expansion" if ai_headline >= 0 else "pmi-contraction"
@@ -737,7 +736,7 @@ with tab1:
     </div>
     <div>
     <div style="font-size:0.68rem; color:#8b949e; font-family:'IBM Plex Mono',monospace; text-transform:uppercase; letter-spacing:0.1em;">
-    Ai Group Australian Industry Index — {ai_date.strftime('%B %Y')}
+    AI GROUP AUSTRALIAN INDUSTRY INDEX — {ai_date.strftime('%B %Y')}
     </div>
     <div style="font-size:0.9rem; font-weight:600; color:{regime_color}; font-family:'IBM Plex Sans',sans-serif; margin-top:2px;">
     Industrial Activity {regime} &nbsp;|&nbsp; Ai Group Industry Index
@@ -746,7 +745,7 @@ with tab1:
     </div>
     """, unsafe_allow_html=True)
 
-        # ====================== SUB-INDEX COMMAND CENTER (Ai Group style) ======================
+    # ====================== SUB-INDEX COMMAND CENTER (Ai Group activity indicators) ======================
     section_header("Sub-Index Command Center", "Key Ai Group activity indicators | value / mom change")
 
     ai_sub = ai_group_data.get("subcomponents", {})
@@ -761,24 +760,20 @@ with tab1:
         with metric_cols[i]:
             if current is not None:
                 delta_str = f"{change:+.1f}" if change is not None else None
-                delta_color = "normal" if current >= 0 else "inverse"
+                delta_color = "normal" if (current >= 0 if key != "Prices" else current <= 50) else "inverse"
                 st.metric(label=label, value=f"{current:.1f}", delta=delta_str, delta_color=delta_color)
             else:
                 st.metric(label=label, value="N/A")
-    st.dataframe(
-        sub_sector_df.style
-        .background_gradient(cmap="RdYlGn", subset=["index"], vmin=-40, vmax=10)
-        .format({"index": "{:+.1f}"}),
-        use_container_width=True,
-        hide_index=True
-    )
 
     st.divider()
 
+    # ====================== GICS SECTOR EXPOSURE ======================
     section_header("GICS Sector Exposure (Ai Group Ranked)", "Ordered by latest Ai Group sub-sector performance")
+
+    # Simple ranked view (you can expand later with real per-sector mapping)
     ranked_df = pd.DataFrame({
         "industry": AU_INDUSTRIES,
-        "score": [ai_headline] * len(AU_INDUSTRIES)  # placeholder — real mapping logic below
+        "score": [ai_headline] * len(AU_INDUSTRIES)
     }).sort_values("score", ascending=False).reset_index(drop=True)
 
     selected_rows = st.dataframe(
@@ -818,9 +813,10 @@ with tab1:
 
             st.success(f"Generated baskets for {len(st.session_state.primary_baskets)} Ai Group-mapped sectors.")
 
-    # Basket display logic (identical to original, just using GICS)
+    # ====================== BASKET DISPLAY ======================
     if "primary_baskets" in st.session_state and st.session_state.primary_baskets:
         col_left, col_right = st.columns([2, 3])
+
         with col_left:
             section_header("Ai Group → GICS Sector Baskets", "Click any row to open deep dive")
             for industry, data in st.session_state.primary_baskets.items():
@@ -836,7 +832,9 @@ with tab1:
                         hide_index=True,
                         on_select="rerun",
                         selection_mode="single-row",
-                        column_config={"Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="View")}
+                        column_config={
+                            "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="View")
+                        }
                     )
                     if selection["selection"]["rows"]:
                         st.session_state.selected_ticker = df_display.iloc[selection["selection"]["rows"][0]]["Ticker"]
@@ -847,35 +845,29 @@ with tab1:
             if ticker:
                 show_stock_deep_dive(ticker)
             else:
-                st.markdown("""<div style="background: #161b22; border: 1px dashed #30363d; border-radius: 8px; padding: 48px 32px; text-align: center; color: #8b949e; font-family: 'IBM Plex Mono', monospace; font-size: 0.82rem;">Select a stock from the baskets on the left<br>to open the professional deep dive panel.</div>""", unsafe_allow_html=True)
+                st.markdown("""
+                <div style="background: #161b22; border: 1px dashed #30363d; border-radius: 8px; padding: 48px 32px; text-align: center; color: #8b949e; font-family: 'IBM Plex Mono', monospace; font-size: 0.82rem;">
+                Select a stock from the baskets on the left<br>to open the professional deep dive panel.
+                </div>
+                """, unsafe_allow_html=True)
 
+    # ====================== AI GROUP COMMENTS ======================
     with st.expander("Ai Group Respondent & Economist Comments", expanded=False):
         comments_list = latest_meta.get("comments", [])
         if comments_list:
             st.markdown(f"**Latest Ai Group Report — {ai_date.strftime('%B %Y')}**")
             st.markdown("\n\n".join(comments_list))
+            st.divider()
         else:
-            st.info("No comments parsed this month.")
-
-        st.subheader("Previous Months' Respondent Comments")
-        historical_dates = sorted(report_metadata.keys(), reverse=True)[:6]
-        for d in historical_dates[1:]:
-            meta = report_metadata[d]
-            old_comments = meta.get("comments", [])
-            month_title = d.strftime('%B %Y')
-            with st.expander(f"📅 {month_title} Comments ({len(old_comments)} quotes)"):
-                if old_comments:
-                    st.markdown("\n\n".join(old_comments))
-                else:
-                    st.info("No respondent comments available for this month.")
+            st.info("No respondent comments parsed for this report.")
 
     st.divider()
 
-    section_header("6-Month Sector Momentum", "Rolling PMI exposure across GICS sectors (placeholder - expand with Ai Group data if desired)")
-    # Simplified heatmap for AU (only overall PMI available from S&P)
+    # ====================== MOMENTUM CHARTS (simplified) ======================
+    section_header("6-Month Sector Momentum", "Rolling Ai Group exposure across GICS sectors")
     pivot_data = pd.DataFrame({
         "industry": AU_INDUSTRIES,
-        latest_date.strftime('%b %Y'): [pmi_val - 50] * len(AU_INDUSTRIES)
+        ai_date.strftime('%b %Y'): [ai_headline] * len(AU_INDUSTRIES)
     }).set_index("industry")
     fig_heat = px.imshow(
         pivot_data,
@@ -890,7 +882,7 @@ with tab1:
 
     st.divider()
 
-    section_header("GICS Score Evolution", "Track PMI-driven trends")
+    section_header("GICS Score Evolution", "Track Ai Group-driven trends")
     to_track = st.multiselect(
         "Select GICS sectors to compare:",
         AU_INDUSTRIES,
@@ -898,9 +890,9 @@ with tab1:
     )
     if to_track:
         line_df = pd.DataFrame({
-            "date": [latest_date] * len(to_track),
+            "date": [ai_date] * len(to_track),
             "industry": to_track,
-            "score": [pmi_val - 50] * len(to_track)
+            "score": [ai_headline] * len(to_track)
         })
         fig_line = px.line(line_df, x='date', y='score', color='industry', markers=True)
         fig_line.update_layout(height=380, **PLOTLY_THEME)
